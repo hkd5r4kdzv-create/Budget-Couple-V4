@@ -1,0 +1,7 @@
+<!doctype html><html lang="fr"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827"><link rel="manifest" href="/static/manifest.json">
+<link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"><title>Notre Budget</title></head>
+<body><header><div class="brand">💶 <b>Notre Budget</b></div>
+{% if session.user_id %}<nav><a href="{{url_for('dashboard')}}">Budget</a>{% if session.is_admin %}<a href="{{url_for('admin')}}">Admin</a>{% endif %}<a href="{{url_for('logout')}}">Sortir</a></nav>{% endif %}
+</header><main>{% for m in get_flashed_messages() %}<div class="flash">{{m}}</div>{% endfor %}{% block content %}{% endblock %}</main></body></html>
