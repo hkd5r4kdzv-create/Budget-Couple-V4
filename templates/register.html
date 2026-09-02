@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block content %}<section class="auth card"><div class="logo">💶</div><h1>Créer un compte</h1><p class="muted">Rejoins le budget commun.</p>
+
+<form method="post"><label>Nom d'utilisateur<input name="username" autocomplete="username" required minlength="3"></label><label>Mot de passe<input name="password" type="password" autocomplete="new-password" required minlength="8"></label><label>Confirmer le mot de passe<input name="password_confirm" type="password" autocomplete="new-password" required minlength="8"></label><button>Créer mon compte</button></form>
+<p class="muted"><a href="{{ url_for('login') }}">J'ai déjà un compte</a></p></section>{% endblock %}
