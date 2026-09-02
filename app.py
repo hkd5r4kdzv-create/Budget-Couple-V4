@@ -54,8 +54,6 @@ def init_db():
     with connect() as con:
         con.execute(SCHEMA)
 
-# Crée les tables au démarrage, que l’appli soit lancée par gunicorn (Render)
-# ou directement via “python app.py”.
 init_db()
 
 def login_required(fn):
@@ -134,6 +132,8 @@ def register():
         except Exception:
             flash("Cet identifiant est déjà pris.")
             return render_template("register.html")
+
+    return render_template("register.html")
 
 @app.route("/login", methods=["GET","POST"])
 def login():
