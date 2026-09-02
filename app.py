@@ -1,9 +1,11 @@
 import os
+import csv
+import io
 from datetime import date
 from functools import wraps
 import psycopg
 from psycopg.rows import dict_row
-from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import Flask, render_template, request, redirect, url_for, session, flash, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -13,34 +15,34 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id BIGSERIAL PRIMARY KEY,
-    username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+id BIGSERIAL PRIMARY KEY,
+username TEXT UNIQUE NOT NULL,
+password_hash TEXT NOT NULL,
+display_name TEXT NOT NULL,
+is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE TABLE IF NOT EXISTS settings (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    person1 TEXT NOT NULL DEFAULT 'Nathan',
-    salary1 NUMERIC(12,2) NOT NULL DEFAULT 0,
-    person2 TEXT NOT NULL DEFAULT 'Angèle',
-    salary2 NUMERIC(12,2) NOT NULL DEFAULT 0,
-    savings_goal NUMERIC(12,2) NOT NULL DEFAULT 0
+id INTEGER PRIMARY KEY CHECK (id = 1),
+person1 TEXT NOT NULL DEFAULT 'Nathan',
+salary1 NUMERIC(12,2) NOT NULL DEFAULT 0,
+person2 TEXT NOT NULL DEFAULT 'Angèle',
+salary2 NUMERIC(12,2) NOT NULL DEFAULT 0,
+savings_goal NUMERIC(12,2) NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS fixed_expenses (
-    id BIGSERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    amount NUMERIC(12,2) NOT NULL CHECK(amount >= 0)
+id BIGSERIAL PRIMARY KEY,
+name TEXT NOT NULL,
+amount NUMERIC(12,2) NOT NULL CHECK(amount >= 0)
 );
 CREATE TABLE IF NOT EXISTS expenses (
-    id BIGSERIAL PRIMARY KEY,
-    category TEXT NOT NULL,
-    amount NUMERIC(12,2) NOT NULL CHECK(amount >= 0),
-    paid_by TEXT NOT NULL,
-    note TEXT NOT NULL DEFAULT '',
-    spent_on DATE NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+id BIGSERIAL PRIMARY KEY,
+category TEXT NOT NULL,
+amount NUMERIC(12,2) NOT NULL CHECK(amount >= 0),
+paid_by TEXT NOT NULL,
+note TEXT NOT NULL DEFAULT '',
+spent_on DATE NOT NULL,
+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 INSERT INTO settings(id) VALUES(1) ON CONFLICT DO NOTHING;
 """
@@ -51,6 +53,10 @@ def connect():
 def init_db():
     with connect() as con:
         con.execute(SCHEMA)
+
+# Crée les tables au démarrage, que l’appli soit lancée par gunicorn (Render)
+# ou directement via “python app.py”.
+init_db()
 
 def login_required(fn):
     @wraps(fn)
@@ -66,7 +72,7 @@ def admin_required(fn):
         if not session.get("user_id"):
             return redirect(url_for("login"))
         if not session.get("is_admin"):
-            flash("Accès réservé à l'administrateur.")
+            flash("Accès réservé à l’administrateur.")
             return redirect(url_for("dashboard"))
         return fn(*args, **kwargs)
     return wrapped
@@ -99,7 +105,35 @@ def setup():
             return redirect(url_for("login"))
         except Exception:
             flash("Impossible de créer ce compte. Essayez un autre identifiant.")
-    return render_template("setup.html")
+            return render_template("setup.html")
+
+@app.route("/register", methods=["GET","POST"])
+def register():
+    if request.method == "POST":
+        username = request.form["username"].strip()
+        password = request.form["password"]
+        password_confirm = request.form.get("password_confirm", "")
+        display_name = username
+        if len(username) < 3:
+            flash("L’identifiant doit contenir au moins 3 caractères.")
+            return render_template("register.html")
+        if len(password) < 8:
+            flash("Le mot de passe doit contenir au moins 8 caractères.")
+            return render_template("register.html")
+        if password != password_confirm:
+            flash("Les deux mots de passe ne correspondent pas.")
+            return render_template("register.html")
+        try:
+            with connect() as con:
+                con.execute(
+                    "INSERT INTO users(username,password_hash,display_name,is_admin) VALUES(%s,%s,%s,FALSE)",
+                    (username, generate_password_hash(password), display_name)
+                )
+            flash("Compte créé, tu peux te connecter.")
+            return redirect(url_for("login"))
+        except Exception:
+            flash("Cet identifiant est déjà pris.")
+            return render_template("register.html")
 
 @app.route("/login", methods=["GET","POST"])
 def login():
@@ -139,8 +173,8 @@ def dashboard():
     paid1 = sum(float(x["amount"]) for x in expenses if x["paid_by"] == s["person1"])
     paid2 = sum(float(x["amount"]) for x in expenses if x["paid_by"] == s["person2"])
     return render_template("dashboard.html", s=s, month=month, fixed=fixed, expenses=expenses,
-        income=income, fixed_total=fixed_total, variable_total=variable_total, remaining=remaining,
-        bycat=bycat, paid1=paid1, paid2=paid2)
+                           income=income, fixed_total=fixed_total, variable_total=variable_total, remaining=remaining,
+                           bycat=bycat, paid1=paid1, paid2=paid2)
 
 @app.post("/settings")
 @login_required
@@ -148,8 +182,8 @@ def settings():
     f=request.form
     with connect() as con:
         con.execute("""UPDATE settings SET person1=%s,salary1=%s,person2=%s,salary2=%s,savings_goal=%s WHERE id=1""",
-            (f["person1"].strip(), float(f["salary1"] or 0), f["person2"].strip(),
-             float(f["salary2"] or 0), float(f["savings_goal"] or 0)))
+                    (f["person1"].strip(), float(f["salary1"] or 0), f["person2"].strip(),
+                     float(f["salary2"] or 0), float(f["savings_goal"] or 0)))
     return redirect(url_for("dashboard"))
 
 @app.post("/fixed/add")
@@ -173,7 +207,7 @@ def expense_add():
     f=request.form
     with connect() as con:
         con.execute("""INSERT INTO expenses(category,amount,paid_by,note,spent_on)
-                       VALUES(%s,%s,%s,%s,%s)""",
+                    VALUES(%s,%s,%s,%s,%s)""",
                     (f["category"], float(f["amount"] or 0), f["paid_by"],
                      f.get("note","").strip(), f["spent_on"]))
     return redirect(url_for("dashboard", month=f["spent_on"][:7]))
@@ -206,6 +240,57 @@ def admin():
         users=con.execute("SELECT id,username,display_name,is_admin FROM users ORDER BY id").fetchall()
     return render_template("admin.html", users=users)
 
+@app.get("/admin/export/users.csv")
+@admin_required
+def export_users():
+    with connect() as con:
+        users = con.execute(
+            "SELECT id,username,display_name,is_admin,created_at FROM users ORDER BY id"
+        ).fetchall()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "identifiant", "nom_affiche", "admin", "cree_le"])
+    for u in users:
+        writer.writerow([u["id"], u["username"], u["display_name"], u["is_admin"], u["created_at"]])
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=utilisateurs.csv"},
+    )
+
+@app.get("/admin/export/expenses.csv")
+@admin_required
+def export_expenses():
+    with connect() as con:
+        expenses = con.execute(
+            "SELECT id,category,amount,paid_by,note,spent_on,created_at FROM expenses ORDER BY spent_on DESC, id DESC"
+        ).fetchall()
+        fixed = con.execute(
+            "SELECT id,name,amount FROM fixed_expenses ORDER BY id"
+        ).fetchall()
+        s = con.execute("SELECT * FROM settings WHERE id=1").fetchone()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["-- Revenus --"])
+    writer.writerow(["personne", "revenu"])
+    writer.writerow([s["person1"], s["salary1"]])
+    writer.writerow([s["person2"], s["salary2"]])
+    writer.writerow([])
+    writer.writerow(["-- Charges fixes --"])
+    writer.writerow(["id", "nom", "montant"])
+    for f in fixed:
+        writer.writerow([f["id"], f["name"], f["amount"]])
+        writer.writerow([])
+        writer.writerow(["-- Dépenses --"])
+        writer.writerow(["id", "categorie", "montant", "paye_par", "note", "date", "cree_le"])
+    for e in expenses:
+        writer.writerow([e["id"], e["category"], e["amount"], e["paid_by"], e["note"], e["spent_on"], e["created_at"]])
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=depenses.csv"},
+    )
+
 @app.post("/admin/delete/<int:user_id>")
 @admin_required
 def admin_delete(user_id):
@@ -218,5 +303,4 @@ def admin_delete(user_id):
     return redirect(url_for("admin"))
 
 if __name__ == "__main__":
-    init_db()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
